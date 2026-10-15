@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142a66">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Administración · Validador de Cobertura</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/estilos.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="barra-contenido">
+      <div class="marca">
+        <img src="favicon.svg" alt="" width="36" height="36">
+        <div>
+          <p class="marca-titulo">Administración</p>
+          <p class="marca-sub" id="estado-actual">Generar archivo de datos</p>
+        </div>
+      </div>
+      <a class="boton boton-barra" href="index.html">Ir al validador</a>
+    </div>
+  </header>
+
+  <main class="contenedor">
+    <div class="admin">
+      <section class="tarjeta seccion">
+        <h1 class="titulo-seccion">Actualizar la matriz de cobertura</h1>
+        <p class="texto-suave">
+          Esta página convierte el Excel de <strong>Cobertura Chile</strong> en el archivo <code>datos/cobertura.js</code>,
+          cifrado con el código del equipo. El Excel no sale de tu computador: todo se procesa aquí, en el navegador.
+        </p>
+      </section>
+
+      <section class="tarjeta seccion">
+        <h2 class="titulo-seccion"><span class="paso-numero">1</span>Código del equipo</h2>
+        <p class="texto-suave" id="ayuda-codigo">
+          Es el código que escriben los operadores para entrar. Usa al menos 8 caracteres, mezclando letras y números.
+        </p>
+        <div class="dos-columnas grupo">
+          <div>
+            <label for="codigo" class="etiqueta">Código</label>
+            <input id="codigo" class="campo" type="password" autocomplete="new-password">
+          </div>
+          <div>
+            <label for="codigo2" class="etiqueta">Repetir código</label>
+            <input id="codigo2" class="campo" type="password" autocomplete="new-password">
+          </div>
+        </div>
+        <label class="casilla margen-arriba"><input type="checkbox" id="ver-codigo"> Mostrar código</label>
+        <p id="estado-codigo" class="chico" aria-live="polite"></p>
+      </section>
+
+      <section class="tarjeta seccion">
+        <h2 class="titulo-seccion"><span class="paso-numero">2</span>Excel de cobertura</h2>
+        <p class="texto-suave">
+          En Google Sheets: <em>Archivo → Descargar → Microsoft Excel (.xlsx)</em>. También sirve un CSV.
+          Columnas necesarias: LOCALIDAD, COMUNA, COURIER y TIEMPO DE ENTREGA.
+        </p>
+        <div class="zona-archivo" id="zona-archivo">
+          <strong>Arrastra aquí el archivo</strong>
+          <span class="texto-suave chico">o</span>
+          <button type="button" class="boton boton-primario" id="btn-archivo">Elegir archivo</button>
+          <input type="file" id="archivo" accept=".xlsx,.xls,.xlsm,.csv" class="sr-only">
+          <span class="texto-suave chico" id="nombre-archivo"></span>
+        </div>
+        <div class="grupo" id="grupo-hoja" hidden>
+          <label for="hoja" class="etiqueta">El archivo tiene varias hojas válidas. ¿Cuál usar?</label>
+          <select id="hoja" class="campo"></select>
+        </div>
+        <p class="alerta alerta-error grupo" id="error-archivo" role="alert" hidden></p>
+      </section>
+
+      <section class="tarjeta seccion" id="seccion-revision" hidden>
+        <h2 class="titulo-seccion"><span class="paso-numero">3</span>Revisión</h2>
+        <div id="revision"></div>
+      </section>
+
+      <section class="tarjeta seccion" id="seccion-generar" hidden>
+        <h2 class="titulo-seccion"><span class="paso-numero">4</span>Generar y publicar</h2>
+        <button type="button" class="boton boton-primario" id="btn-generar" disabled>Generar cobertura.js</button>
+        <p class="alerta alerta-error grupo" id="error-generar" role="alert" hidden></p>
+        <div id="listo" hidden>
+          <p class="alerta alerta-ok grupo">Se descargó <strong>cobertura.js</strong>. Ahora súbelo a GitHub:</p>
+          <ol class="pasos-github">
+            <li>Abre el repositorio en GitHub y entra a la carpeta <code>datos</code>.</li>
+            <li>Presiona <strong>Add file → Upload files</strong> y arrastra el <code>cobertura.js</code> descargado.</li>
+            <li>Presiona <strong>Commit changes</strong>.</li>
+            <li>En 1 a 2 minutos los operadores verán los datos nuevos al recargar la página.</li>
+          </ol>
+          <p class="texto-suave chico grupo">
+            Para probar en este computador: copia el archivo a la carpeta <code>datos</code> del proyecto y abre <code>index.html</code>.
+          </p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
+          integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+  <script src="datos/cobertura.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/texto.js"></script>
+  <script src="js/fechas.js"></script>
+  <script src="js/cripto.js"></script>
+  <script src="js/importacion.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

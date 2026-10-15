@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142a66">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Validador de Cobertura Chile</title>
+  <meta name="description" content="Consulta de cobertura, courier, forma de pago, fecha estimada de entrega y ubicación del cliente para despachos en Chile.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
+  <link rel="stylesheet" href="css/estilos.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="barra-contenido">
+      <div class="marca">
+        <img src="favicon.svg" alt="" width="36" height="36">
+        <div>
+          <p class="marca-titulo">Validador de Cobertura</p>
+          <p class="marca-sub" id="estado-datos">Despachos Chile</p>
+        </div>
+      </div>
+      <button type="button" class="boton boton-barra" id="btn-bloquear" hidden title="Cerrar y olvidar el código en este equipo">
+        Bloquear
+      </button>
+    </div>
+  </header>
+
+  <main class="contenedor">
+    <!-- Código de acceso -->
+    <section id="pantalla-codigo" class="pantalla-centro" hidden>
+      <form id="form-codigo" class="tarjeta tarjeta-acceso" novalidate>
+        <h1>Ingresa el código del equipo</h1>
+        <p class="texto-suave">Los datos de cobertura están protegidos. Pide el código a tu teamleader.</p>
+        <label for="codigo" class="etiqueta">Código de acceso</label>
+        <input id="codigo" class="campo" type="password" autocomplete="current-password" required>
+        <label class="casilla">
+          <input type="checkbox" id="recordar" checked>
+          Recordar en este equipo
+        </label>
+        <p class="alerta alerta-error" id="error-codigo" role="alert" hidden></p>
+        <button type="submit" class="boton boton-primario boton-ancho" id="btn-entrar">Entrar</button>
+      </form>
+    </section>
+
+    <!-- Sin archivo de datos -->
+    <section id="pantalla-sin-datos" class="pantalla-centro" hidden>
+      <div class="tarjeta tarjeta-acceso">
+        <h1>Todavía no hay datos de cobertura</h1>
+        <p class="texto-suave" id="detalle-sin-datos">
+          No se encontró el archivo <code>datos/cobertura.js</code>. El administrador debe generarlo en
+          <a href="admin.html">admin.html</a> y subirlo a la carpeta <code>datos</code> del repositorio.
+        </p>
+      </div>
+    </section>
+
+    <!-- Aplicación -->
+    <div id="pantalla-principal" class="rejilla" hidden>
+      <div class="columna">
+        <section class="tarjeta seccion">
+          <label for="buscar" class="etiqueta etiqueta-grande">Buscar localidad, comuna, código postal o siglas</label>
+          <div class="buscador">
+            <svg class="buscador-icono" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="buscar" class="campo campo-grande" type="search" autocomplete="off" spellcheck="false"
+                   placeholder="Ej.: Achao, Puerto Montt, 5700000…" aria-describedby="ayuda-buscar" aria-controls="lista-resultados">
+            <button type="button" class="buscador-limpiar" id="btn-limpiar" hidden>Limpiar</button>
+            <kbd class="buscador-atajo" id="atajo">/</kbd>
+          </div>
+          <p class="ayuda" id="ayuda-buscar">
+            No importan tildes ni mayúsculas y se toleran errores de tipeo. Usa ↑ ↓ para recorrer los resultados.
+            ¿Solo tienes la dirección? <a href="#direccion" id="ir-direccion">Búscala en el mapa</a>.
+          </p>
+          <div class="filtros">
+            <select id="filtro-region" class="campo" aria-label="Filtrar por región"></select>
+            <select id="filtro-comuna" class="campo" aria-label="Filtrar por comuna"></select>
+            <select id="filtro-courier" class="campo" aria-label="Filtrar por courier"></select>
+            <label class="casilla casilla-caja">
+              <input type="checkbox" id="filtro-activas">
+              Solo activas
+            </label>
+          </div>
+          <button type="button" class="boton boton-fantasma boton-chico" id="btn-quitar-filtros" hidden>Quitar filtros</button>
+        </section>
+
+        <section class="tarjeta" id="panel-resultados" aria-live="polite"></section>
+      </div>
+
+      <div class="columna">
+        <section class="tarjeta" id="panel-detalle"></section>
+
+        <section class="tarjeta seccion" id="panel-mapa">
+          <h2 class="titulo-seccion">Ubicación del cliente</h2>
+          <form id="form-direccion" class="fila-form" novalidate>
+            <label for="direccion" class="sr-only">Dirección del cliente</label>
+            <input id="direccion" class="campo" type="search" autocomplete="off"
+                   placeholder="Calle y número, comuna (ej.: Los Aromos 123, Castro)">
+            <button type="submit" class="boton boton-primario" id="btn-direccion">Buscar</button>
+          </form>
+          <div id="opciones-direccion"></div>
+          <div id="mapa" class="mapa" role="region" aria-label="Mapa"></div>
+          <p class="leyenda">
+            <span class="punto punto-localidad"></span> Localidad elegida
+            <span class="punto punto-cliente"></span> Dirección del cliente
+          </p>
+          <div id="info-mapa"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer class="pie">
+    Fechas estimadas en hora de Chile, contando días hábiles, feriados y días de reparto de cada localidad.
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+  <script src="datos/cobertura.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/texto.js"></script>
+  <script src="js/fechas.js"></script>
+  <script src="js/buscador.js"></script>
+  <script src="js/cripto.js"></script>
+  <script src="js/mapa.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

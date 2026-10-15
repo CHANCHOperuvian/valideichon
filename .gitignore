@@ -1,0 +1,8 @@
+# El Excel de cobertura nunca se sube: se procesa en admin.html y se publica cifrado.
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+
+.DS_Store
+Thumbs.db
