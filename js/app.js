@@ -5,68 +5,159 @@
   var $ = function (id) { return document.getElementById(id); };
   var LIMITE_RESULTADOS = 60;
   var ORDEN_SEMANA = [1, 2, 3, 4, 5, 6, 0];
+  var AVISO_SIN_BUSQUEDA = 'La ubicación en el mapa funciona en la página publicada (GitHub Pages). ' +
+    'Abierta directamente desde el archivo, el servicio de mapas no responde.';
 
   var estado = {
-    datos: null,
-    buscador: null,
+    campana: VC.campana(VC.almacen.leer('campana')),
+    porCampana: {},       // id → { datos, buscador }
+    codigoSesion: null,   // último código que funcionó (se prueba en las otras campañas)
     consulta: '',
     filtros: {},
     resultado: { filas: [], total: 0, aproximado: false },
     indice: 0,
     elegido: null,
-    puntoLocalidad: null,
+    puntoLugar: null,
     cliente: null,
     mapa: null
   };
 
-  // ─────────────────────────── Inicio y código de acceso ───────────────────────────
+  function buscadorActual() {
+    var c = estado.porCampana[estado.campana.id];
+    return c ? c.buscador : null;
+  }
+
+  // ─────────────────────────── Campañas ───────────────────────────
+
+  function renderSelectorCampanas() {
+    var nav = $('selector-campanas');
+    nav.replaceChildren.apply(nav, VC.CAMPANAS.map(function (c) {
+      var activa = c.id === estado.campana.id;
+      return h('button', {
+        type: 'button',
+        class: 'campana' + (activa ? ' campana-activa' : ''),
+        'aria-pressed': activa ? 'true' : 'false',
+        title: 'Campaña ' + c.nombre,
+        onclick: function () { if (!activa) cambiarCampana(c.id); }
+      }, VC.bandera(c.id), h('span', { class: 'campana-nombre' }, c.nombre));
+    }));
+  }
+
+  function aplicarTextosCampana() {
+    var c = estado.campana;
+    document.body.setAttribute('data-campana', c.id);
+    document.title = 'Validador de Cobertura · ' + c.nombre;
+    $('marca-campana').replaceChildren(VC.bandera(c.id), c.nombre);
+    $('etiqueta-buscar').textContent = c.textoBusqueda;
+    $('buscar').placeholder = c.ejemploBusqueda;
+    $('direccion').placeholder = c.ejemploDireccion;
+    $('leyenda-lugar').textContent = c.etiquetas.lugar + ' elegida';
+    $('pie-texto').textContent = 'Campaña ' + c.nombre + ' · Fechas estimadas con días hábiles, feriados de ' + c.pais +
+      ' y días de reparto. El día cambia a las ' + VC.horaDeCorteLocal() + ' (00:00 UTC).';
+  }
+
+  function cambiarCampana(id) {
+    estado.campana = VC.campana(id);
+    VC.almacen.guardar('campana', estado.campana.id);
+    estado.consulta = '';
+    estado.filtros = {};
+    estado.elegido = null;
+    estado.cliente = null;
+    estado.puntoLugar = null;
+    $('buscar').value = '';
+    $('direccion').value = '';
+    $('opciones-direccion').replaceChildren();
+    $('info-mapa').replaceChildren();
+    renderSelectorCampanas();
+    aplicarTextosCampana();
+    abrirCampana();
+  }
+
+  // ─────────────────────────── Carga y código de acceso ───────────────────────────
 
   function mostrarPantalla(nombre) {
-    ['codigo', 'sin-datos', 'principal'].forEach(function (p) {
+    ['cargando', 'codigo', 'sin-datos', 'principal'].forEach(function (p) {
       $('pantalla-' + p).hidden = p !== nombre;
     });
     $('btn-bloquear').hidden = nombre !== 'principal';
   }
 
-  function iniciar() {
+  function codigosConocidos(campana) {
+    var lista = [VC.almacen.leer('codigo:' + campana.id), estado.codigoSesion];
+    VC.CAMPANAS.forEach(function (c) { lista.push(VC.almacen.leer('codigo:' + c.id)); });
+    lista.push(VC.almacen.leer('codigo')); // versión anterior
+    return lista.filter(function (x, i) { return x && lista.indexOf(x) === i; });
+  }
+
+  function abrirCampana() {
+    var campana = estado.campana;
+    if (estado.porCampana[campana.id]) {
+      mostrarPrincipal();
+      return;
+    }
     if (!VC.cripto.disponible()) {
+      $('titulo-sin-datos').textContent = 'Navegador no compatible';
       $('detalle-sin-datos').textContent = 'Este navegador no permite descifrar los datos. Usa Chrome, Edge o Firefox actualizados.';
       mostrarPantalla('sin-datos');
       return;
     }
-    if (!window.VC_DATOS) {
-      mostrarPantalla('sin-datos');
-      return;
-    }
-    var guardado = VC.almacen.leer('codigo');
-    if (guardado) {
-      abrir(guardado).catch(function () {
-        VC.almacen.borrar('codigo');
-        pedirCodigo();
-      });
-    } else {
-      pedirCodigo();
-    }
+
+    mostrarPantalla('cargando');
+    $('estado-datos').textContent = 'Cargando ' + campana.nombre + '…';
+
+    VC.cargarSobre(campana).then(function (sobre) {
+      if (campana !== estado.campana) return;
+      if (!sobre) {
+        $('estado-datos').textContent = 'Sin datos publicados';
+        $('titulo-sin-datos').textContent = 'Todavía no hay datos de ' + campana.nombre;
+        $('detalle-sin-datos').replaceChildren(
+          'No se encontró el archivo ', h('code', null, campana.archivo), '. El administrador debe generarlo en ',
+          h('a', { href: 'admin.html' }, 'Administración'), ' y subirlo a la carpeta ', h('code', null, 'datos'), ' del repositorio.');
+        mostrarPantalla('sin-datos');
+        return;
+      }
+
+      // Probar en silencio los códigos ya conocidos (el mismo código puede servir para varias campañas).
+      var codigos = codigosConocidos(campana);
+      var intentar = function (i) {
+        if (i >= codigos.length) return pedirCodigo();
+        return abrir(campana, sobre, codigos[i]).catch(function () { return intentar(i + 1); });
+      };
+      return intentar(0);
+    });
   }
 
   function pedirCodigo() {
+    $('titulo-codigo').replaceChildren(VC.bandera(estado.campana.id), ' Código de la campaña ' + estado.campana.nombre);
+    $('estado-datos').textContent = 'Datos protegidos';
+    $('error-codigo').hidden = true;
     mostrarPantalla('codigo');
     $('codigo').focus();
   }
 
-  function abrir(codigo) {
-    return VC.cripto.descifrar(window.VC_DATOS, codigo).then(function (datos) {
+  function abrir(campana, sobre, codigo) {
+    return VC.cripto.descifrar(sobre, codigo).then(function (datos) {
       if (!datos || !Array.isArray(datos.filas)) throw new Error('formato');
-      estado.datos = datos;
-      estado.buscador = new VC.Buscador(datos.filas);
-      $('estado-datos').textContent = VC.plural(datos.filas.length, 'localidad', 'localidades') +
-        (datos.generado ? ' · actualizado ' + VC.formatearFechaHora(datos.generado) : '');
-      poblarFiltros();
-      mostrarPantalla('principal');
-      prepararMapa();
-      actualizar();
-      $('buscar').focus();
+      var filas = datos.filas.map(VC.migrarFila);
+      estado.porCampana[campana.id] = { datos: datos, buscador: new VC.Buscador(filas) };
+      estado.codigoSesion = codigo;
+      if (campana === estado.campana) mostrarPrincipal();
     });
+  }
+
+  function mostrarPrincipal() {
+    var c = estado.porCampana[estado.campana.id];
+    $('estado-datos').textContent = VC.plural(c.buscador.total, 'registro', 'registros') +
+      (c.datos.generado ? ' · actualizado ' + VC.formatearFechaHora(c.datos.generado) : '');
+    mostrarPantalla('principal');
+    poblarFiltros();
+    prepararMapa();
+    if (estado.mapa) {
+      estado.mapa.ajustarTamano();
+      estado.mapa.usarCampana(estado.campana);
+    }
+    actualizar();
+    $('buscar').focus();
   }
 
   $('form-codigo').addEventListener('submit', function (e) {
@@ -78,19 +169,21 @@
       error.hidden = false;
       return;
     }
+    var campana = estado.campana;
     var boton = $('btn-entrar');
     boton.disabled = true;
     boton.textContent = 'Verificando…';
     error.hidden = true;
 
-    abrir(codigo)
+    VC.cargarSobre(campana)
+      .then(function (sobre) { return abrir(campana, sobre, codigo); })
       .then(function () {
-        if ($('recordar').checked) VC.almacen.guardar('codigo', codigo);
+        if ($('recordar').checked) VC.almacen.guardar('codigo:' + campana.id, codigo);
         $('codigo').value = '';
       })
       .catch(function (err) {
         error.textContent = err.message === 'codigo'
-          ? 'Código incorrecto.'
+          ? 'Código incorrecto para ' + campana.nombre + '.'
           : err.message === 'navegador'
             ? 'Tu navegador es muy antiguo. Actualiza Chrome o Edge.'
             : 'El archivo de datos está dañado. Avisa al administrador.';
@@ -104,39 +197,78 @@
   });
 
   $('btn-bloquear').addEventListener('click', function () {
+    VC.CAMPANAS.forEach(function (c) { VC.almacen.borrar('codigo:' + c.id); });
     VC.almacen.borrar('codigo');
     window.location.reload();
   });
 
-  // ─────────────────────────── Búsqueda y filtros ───────────────────────────
+  // ─────────────────────────── Filtros ───────────────────────────
 
-  function opciones(select, textoTodos, valores, seleccionado) {
-    select.replaceChildren(h('option', { value: '' }, textoTodos));
-    valores.forEach(function (v) {
-      select.appendChild(h('option', { value: v, selected: v === seleccionado }, v));
-    });
-  }
-
+  /** Crea los filtros de la campaña. Cada uno muestra solo opciones compatibles con los anteriores. */
   function poblarFiltros() {
-    var b = estado.buscador;
-    opciones($('filtro-region'), 'Región (todas)', b.regiones, estado.filtros.region);
-    poblarComunas();
-    opciones($('filtro-courier'), 'Courier (todos)', b.couriers, estado.filtros.courier);
+    var b = buscadorActual();
+    var c = estado.campana;
+    var contenedor = $('filtros');
+    var previos = {};
+    var elementos = [];
+
+    c.filtros.forEach(function (filtro) {
+      var opciones = b.opciones(filtro.campo, previos);
+      if (opciones.length < 2 && !estado.filtros[filtro.campo]) {
+        previos[filtro.campo] = estado.filtros[filtro.campo];
+        return; // un filtro con una sola opción no sirve
+      }
+      var select = h('select', { class: 'campo', 'aria-label': 'Filtrar por ' + filtro.etiqueta.toLowerCase() },
+        h('option', { value: '' }, filtro.etiqueta));
+      opciones.forEach(function (v) {
+        select.appendChild(h('option', { value: v, selected: v === estado.filtros[filtro.campo] }, v));
+      });
+      select.addEventListener('change', function () {
+        estado.filtros[filtro.campo] = select.value || undefined;
+        // Los filtros que dependen de este se reinician.
+        var posterior = false;
+        c.filtros.forEach(function (f) {
+          if (posterior) estado.filtros[f.campo] = undefined;
+          if (f.campo === filtro.campo) posterior = true;
+        });
+        poblarFiltros();
+        actualizar();
+      });
+      elementos.push(select);
+      previos[filtro.campo] = estado.filtros[filtro.campo];
+    });
+
+    var hayInactivas = b.filas.some(function (f) { return !f.activo; });
+    if (hayInactivas) {
+      var casilla = h('input', { type: 'checkbox', id: 'filtro-activas', checked: Boolean(estado.filtros.soloActivas) });
+      casilla.addEventListener('change', function () {
+        estado.filtros.soloActivas = casilla.checked || undefined;
+        actualizar();
+      });
+      elementos.push(h('label', { class: 'casilla casilla-caja' }, casilla, 'Solo con cobertura'));
+    }
+    contenedor.replaceChildren.apply(contenedor, elementos);
   }
 
-  function poblarComunas() {
-    var b = estado.buscador;
-    var lista = estado.filtros.region ? (b.comunasPorRegion.get(estado.filtros.region) || []) : b.todasLasComunas;
-    opciones($('filtro-comuna'), 'Comuna (todas)', lista, estado.filtros.comuna);
+  $('btn-quitar-filtros').addEventListener('click', function () {
+    estado.filtros = {};
+    poblarFiltros();
+    actualizar();
+  });
+
+  // ─────────────────────────── Búsqueda ───────────────────────────
+
+  function hayFiltros() {
+    return Object.keys(estado.filtros).some(function (k) { return estado.filtros[k]; });
   }
 
   /** Recalcula la búsqueda y vuelve a elegir el primer resultado. */
   function actualizar() {
-    if (!estado.buscador) return;
-    estado.resultado = estado.buscador.buscar(estado.consulta, estado.filtros, LIMITE_RESULTADOS);
+    var b = buscadorActual();
+    if (!b) return;
+    estado.resultado = b.buscar(estado.consulta, estado.filtros, LIMITE_RESULTADOS);
     estado.indice = 0;
-    var hayFiltros = Boolean(estado.filtros.region || estado.filtros.comuna || estado.filtros.courier || estado.filtros.soloActivas);
-    $('btn-quitar-filtros').hidden = !hayFiltros;
+    $('btn-quitar-filtros').hidden = !hayFiltros();
     $('btn-limpiar').hidden = !estado.consulta;
     $('atajo').hidden = Boolean(estado.consulta);
     renderResultados();
@@ -182,65 +314,39 @@
     }
   });
 
-  $('filtro-region').addEventListener('change', function (e) {
-    estado.filtros.region = e.target.value || undefined;
-    estado.filtros.comuna = undefined;
-    poblarComunas();
-    actualizar();
-  });
-  $('filtro-comuna').addEventListener('change', function (e) {
-    estado.filtros.comuna = e.target.value || undefined;
-    actualizar();
-  });
-  $('filtro-courier').addEventListener('change', function (e) {
-    estado.filtros.courier = e.target.value || undefined;
-    actualizar();
-  });
-  $('filtro-activas').addEventListener('change', function (e) {
-    estado.filtros.soloActivas = e.target.checked || undefined;
-    actualizar();
-  });
-  $('btn-quitar-filtros').addEventListener('click', function () {
-    estado.filtros = {};
-    $('filtro-activas').checked = false;
-    poblarFiltros();
-    actualizar();
-  });
-
-  $('ir-direccion').addEventListener('click', function (e) {
-    e.preventDefault();
-    $('panel-mapa').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    $('direccion').focus({ preventScroll: true });
-  });
-
   // ─────────────────────────── Resultados ───────────────────────────
 
   function insigniaCourier(courier) {
-    var clase = courier === VC.config.courierContra ? 'insignia-contra'
-      : courier === VC.config.courierBlue ? 'insignia-blue' : 'insignia-neutra';
-    return h('span', { class: 'insignia ' + clase }, courier || 'Sin courier');
+    var clase = courier === 'Contraentrega' ? 'insignia-contra' : courier === 'Blue Express' ? 'insignia-blue' : 'insignia-neutra';
+    return h('span', { class: 'insignia ' + clase }, courier);
+  }
+
+  function insigniaEstado(fila) {
+    if (!fila.activo) return h('span', { class: 'insignia insignia-inactiva' }, 'Sin cobertura');
+    return fila.courier ? insigniaCourier(fila.courier) : h('span', { class: 'insignia insignia-cubre' }, 'Con cobertura');
+  }
+
+  function ubicacionTexto(fila) {
+    return [fila.zona, fila.zona && fila.provincia && fila.provincia !== fila.zona ? fila.provincia : null, fila.region]
+      .filter(Boolean).join(' · ');
   }
 
   function renderResultados() {
     var panel = $('panel-resultados');
     var r = estado.resultado;
-    var hayBusqueda = estado.consulta.trim() || estado.filtros.region || estado.filtros.comuna || estado.filtros.courier || estado.filtros.soloActivas;
+    var b = buscadorActual();
 
-    if (!hayBusqueda) {
-      panel.replaceChildren(vacio('Escribe una localidad para validar la cobertura',
-        'Hay ' + VC.plural(estado.buscador.total, 'localidad', 'localidades') +
-        ' cargadas. También puedes usar los filtros para ver una comuna completa.'));
+    if (!estado.consulta.trim() && !hayFiltros()) {
+      panel.replaceChildren(vacio('Escribe para validar la cobertura',
+        'Hay ' + VC.plural(b.total, 'registro', 'registros') + ' de ' + estado.campana.nombre +
+        '. También puedes usar los filtros o ubicar la dirección del cliente.'));
       return;
     }
     if (r.total === 0) {
       panel.replaceChildren(vacio('No encontramos “' + estado.consulta.trim() + '”',
-        'Revisa la ortografía, prueba solo con la comuna o quita los filtros. Si no aparece, la localidad no está en la matriz de cobertura.'));
+        'Revisa la ortografía, prueba con el nivel superior o quita los filtros. Si no aparece, no está en la matriz de cobertura de ' + estado.campana.nombre + '.'));
       return;
     }
-
-    var cabecera = h('div', { class: 'resultados-cabecera' },
-      h('strong', null, VC.plural(r.total, 'resultado')),
-      r.total > r.filas.length ? h('span', { class: 'texto-suave' }, ' · mostrando ' + r.filas.length + ', afina la búsqueda') : null);
 
     var lista = h('ul', { class: 'resultados', id: 'lista-resultados' });
     r.filas.forEach(function (fila, i) {
@@ -252,14 +358,17 @@
           onclick: function () { elegir(fila, i); }
         },
           h('span', { class: 'resultado-texto' },
-            h('span', { class: 'resultado-nombre' }, fila.localidad),
-            h('span', { class: 'resultado-lugar' }, fila.comuna + ' · ' + fila.region)),
+            h('span', { class: 'resultado-nombre' }, fila.lugar),
+            h('span', { class: 'resultado-lugar' }, ubicacionTexto(fila))),
           h('span', { class: 'resultado-extra' },
-            fila.activo ? insigniaCourier(fila.courier) : h('span', { class: 'insignia insignia-inactiva' }, 'Inactiva'),
-            fila.activo && fila.tiempoEntrega !== null ? h('span', { class: 'texto-suave chico' }, VC.plural(fila.tiempoEntrega, 'día', 'días')) : null))));
+            insigniaEstado(fila),
+            fila.activo && fila.tiempo !== null && fila.tiempo !== undefined
+              ? h('span', { class: 'texto-suave chico' }, VC.plural(fila.tiempo, 'día', 'días')) : null))));
     });
 
-    panel.replaceChildren(cabecera);
+    panel.replaceChildren(h('div', { class: 'resultados-cabecera' },
+      h('strong', null, VC.plural(r.total, 'resultado')),
+      r.total > r.filas.length ? h('span', { class: 'texto-suave' }, ' · mostrando ' + r.filas.length + ', afina la búsqueda') : null));
     if (r.aproximado) {
       panel.appendChild(h('p', { class: 'alerta alerta-aviso margen' },
         'Sin coincidencia exacta para “' + estado.consulta.trim() + '”. ¿Quisiste decir alguna de estas?'));
@@ -271,14 +380,13 @@
     return h('div', { class: 'vacio' }, h('p', { class: 'vacio-titulo' }, titulo), h('p', { class: 'texto-suave' }, texto));
   }
 
-  /** Marca una localidad como elegida (desde la lista, homónimos o la dirección del cliente). */
+  /** Marca una fila como elegida (desde la lista, homónimos o la dirección del cliente). */
   function elegir(fila, indice, opciones) {
     opciones = opciones || {};
     estado.elegido = fila;
     estado.indice = indice;
 
-    var botones = document.querySelectorAll('#lista-resultados .resultado');
-    botones.forEach(function (b) {
+    document.querySelectorAll('#lista-resultados .resultado').forEach(function (b) {
       var activo = fila && Number(b.getAttribute('data-indice')) === indice && estado.resultado.filas[indice] === fila;
       b.classList.toggle('resultado-elegido', Boolean(activo));
       if (activo) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
@@ -286,7 +394,7 @@
     });
 
     renderDetalle();
-    ubicarLocalidadEnMapa();
+    ubicarEnMapa();
 
     if (!opciones.sinDesplazar && !opciones.desdeTeclado && window.matchMedia('(max-width: 960px)').matches) {
       $('panel-detalle').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -296,36 +404,47 @@
   // ─────────────────────────── Detalle ───────────────────────────
 
   function fechaDe(fila) {
-    return fila.tiempoEntrega === null ? null : VC.calcularFechaEntrega(fila.tiempoEntrega, fila.diasReparto);
+    return fila.tiempo === null || fila.tiempo === undefined ? null : VC.calcularFechaEntrega(fila.tiempo, fila.dias, estado.campana);
   }
 
   function urlGoogleMaps(fila, direccion) {
-    var q = [direccion, fila.localidad, fila.comuna, fila.region, 'Chile'].filter(Boolean).join(', ');
+    var q = [direccion, fila.lugar, fila.zona, fila.region, estado.campana.pais].filter(Boolean).join(', ');
     return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
   }
 
+  function lugarParaCliente(fila) {
+    var c = estado.campana;
+    var texto = VC.enTitulo(fila.lugar);
+    if (fila.zona) return texto + ', ' + c.etiquetas.zona.toLowerCase() + ' de ' + VC.enTitulo(fila.zona);
+    return fila.region ? texto + ' (' + fila.region + ')' : texto;
+  }
+
   function mensajeCliente(fila, fecha) {
-    var pago = VC.reglaPago(fila.courier);
-    var lugar = VC.enTitulo(fila.localidad) + ', comuna de ' + VC.enTitulo(fila.comuna);
-    var llegada = fecha ? 'Tu pedido llegaría aproximadamente el ' + fecha.texto : 'Tu pedido se despacha';
-    return '¡Hola! Te confirmo que sí tenemos cobertura en ' + lugar + '. ' + llegada +
-      (fila.courier ? ' con ' + fila.courier : '') + ' y ' + pago.paraCliente + '.';
+    var pago = VC.reglaPago(estado.campana, fila.courier);
+    var partes = ['¡Hola! Te confirmo que sí tenemos cobertura en ' + lugarParaCliente(fila) + '.'];
+    var cola = (fila.courier ? ' con ' + fila.courier : '') + (pago ? ' y ' + pago.paraCliente : '') + '.';
+    if (fecha) partes.push('Tu pedido llegaría aproximadamente el ' + fecha.texto + cola);
+    else if (fila.courier) partes.push('El despacho se realiza' + cola);
+    return partes.join(' ');
   }
 
   function resumenInterno(fila, fecha) {
-    var reparto = VC.interpretarDiasReparto(fila.diasReparto);
-    var lineas = [
-      'LOCALIDAD: ' + fila.localidad,
-      'COMUNA: ' + fila.comuna,
-      'REGIÓN: ' + fila.region,
-      'COBERTURA: ' + (fila.activo ? 'ACTIVA' : 'INACTIVA'),
-      'COURIER: ' + (fila.courier || '-'),
-      'PAGO: ' + VC.reglaPago(fila.courier).corto,
-      'DÍAS DE REPARTO: ' + (fila.diasReparto || '-') + ' (' + VC.resumirDias(reparto.dias) + ')',
-      'TIEMPO DE ENTREGA: ' + (fila.tiempoEntrega === null ? '-' : fila.tiempoEntrega + ' días hábiles'),
-      'FECHA ESTIMADA: ' + (fecha ? fecha.textoLargo : '-'),
-      'CÓDIGO POSTAL: ' + (fila.zipcode || '-')
-    ];
+    var c = estado.campana;
+    var e = c.etiquetas;
+    var pago = VC.reglaPago(c, fila.courier);
+    var lineas = ['CAMPAÑA: ' + c.nombre.toUpperCase(), e.lugar.toUpperCase() + ': ' + fila.lugar];
+    if (fila.zona) lineas.push(e.zona.toUpperCase() + ': ' + fila.zona);
+    if (fila.provincia) lineas.push(e.provincia.toUpperCase() + ': ' + fila.provincia);
+    if (fila.region) lineas.push(e.region.toUpperCase() + ': ' + fila.region);
+    if (fila.barrios) lineas.push('BARRIOS: ' + fila.barrios);
+    lineas.push('COBERTURA: ' + (fila.activo ? 'SÍ' : 'NO'));
+    if (fila.courier) lineas.push('COURIER: ' + fila.courier);
+    if (pago) lineas.push('PAGO: ' + pago.corto);
+    if (fila.productos) lineas.push('PRODUCTOS: ' + fila.productos);
+    if (fila.dias) lineas.push(e.dias.toUpperCase() + ': ' + fila.dias + ' (' + VC.resumirDias(VC.interpretarDiasReparto(fila.dias).dias) + ')');
+    if (fila.tiempo !== null && fila.tiempo !== undefined) lineas.push('TIEMPO DE ENTREGA: ' + fila.tiempo + ' días hábiles');
+    if (fecha) lineas.push('FECHA ESTIMADA: ' + fecha.textoLargo);
+    if (fila.codigo) lineas.push(e.codigo.toUpperCase() + ': ' + fila.codigo);
     if (estado.cliente) lineas.push('DIRECCIÓN CLIENTE: ' + estado.cliente.nombre);
     lineas.push('MAPS: ' + urlGoogleMaps(fila, estado.cliente ? estado.cliente.nombre : ''));
     return lineas.join('\n');
@@ -343,72 +462,83 @@
   }
 
   function dato(titulo, contenido, clase) {
-    return h('div', { class: 'dato' + (clase ? ' ' + clase : '') },
-      h('dt', null, titulo),
-      h('dd', null, contenido));
+    return h('div', { class: 'dato' + (clase ? ' ' + clase : '') }, h('dt', null, titulo), h('dd', null, contenido));
   }
 
   function renderDetalle() {
     var panel = $('panel-detalle');
     var fila = estado.elegido;
+    var c = estado.campana;
     if (!fila) {
-      panel.replaceChildren(vacio('Elige una localidad', 'Aquí verás la cobertura, el courier, la forma de pago y la fecha estimada de entrega.'));
+      panel.replaceChildren(vacio('Elige un resultado', 'Aquí verás la cobertura, el courier, la forma de pago y la fecha estimada de entrega.'));
       return;
     }
 
     var fecha = fechaDe(fila);
-    var pago = VC.reglaPago(fila.courier);
-    var reparto = VC.interpretarDiasReparto(fila.diasReparto);
-    var homonimos = estado.buscador.homonimos(fila);
+    var pago = VC.reglaPago(c, fila.courier);
+    var homonimos = buscadorActual().homonimos(fila);
 
     var cabecera = h('header', { class: 'detalle-cabecera' + (fila.activo ? '' : ' detalle-cabecera-inactiva') },
       h('div', { class: 'fila-insignias' },
-        fila.activo ? h('span', { class: 'insignia insignia-activa' }, 'Activa') : h('span', { class: 'insignia insignia-inactiva-fuerte' }, 'Inactiva'),
-        insigniaCourier(fila.courier)),
-      h('h2', { class: 'detalle-titulo' }, fila.localidad),
-      h('p', { class: 'texto-suave' },
-        fila.comuna + (fila.provincia && fila.provincia !== fila.comuna ? ' · Prov. ' + fila.provincia : '') + ' · ' + fila.region));
+        fila.activo ? h('span', { class: 'insignia insignia-activa' }, 'Con cobertura') : h('span', { class: 'insignia insignia-inactiva-fuerte' }, 'Sin cobertura'),
+        fila.courier ? insigniaCourier(fila.courier) : null),
+      h('h2', { class: 'detalle-titulo' }, fila.lugar),
+      h('p', { class: 'texto-suave' }, [
+        fila.zona ? c.etiquetas.zona + ' ' + fila.zona : null,
+        fila.provincia && fila.provincia !== fila.zona ? 'Prov. ' + fila.provincia : null,
+        fila.region
+      ].filter(Boolean).join(' · ')));
 
     var cuerpo = h('div', { class: 'detalle-cuerpo' });
 
     if (!fila.activo) {
       cuerpo.appendChild(h('div', { class: 'alerta alerta-error', role: 'alert' },
-        h('strong', null, 'Localidad SIN cobertura (inactiva). '),
-        'No tomes pedidos para esta localidad. Ofrece al cliente otra dirección de entrega con cobertura.'));
+        h('strong', null, 'SIN cobertura. '),
+        'No tomes pedidos para esta dirección. Ofrece al cliente otra dirección de entrega con cobertura.'));
+    }
+
+    if (fila.productos) {
+      var restringido = /solo|excepto|no /i.test(fila.productos);
+      cuerpo.appendChild(h('div', { class: 'alerta ' + (restringido ? 'alerta-aviso' : 'alerta-ok') },
+        h('strong', null, 'Productos: '), fila.productos));
     }
 
     if (homonimos.length) {
       cuerpo.appendChild(h('div', { class: 'alerta alerta-aviso' },
-        h('strong', null, homonimos.length === 1 ? 'Hay otra localidad con este nombre. ' : 'Hay ' + homonimos.length + ' localidades más con este nombre. '),
-        'Confirma la comuna con el cliente:',
+        h('strong', null, homonimos.length === 1 ? 'Hay otro registro con este nombre. ' : 'Hay ' + homonimos.length + ' registros más con este nombre. '),
+        'Confirma la ubicación con el cliente:',
         h('div', { class: 'chips' }, homonimos.slice(0, 8).map(function (o) {
           return h('button', { type: 'button', class: 'chip', onclick: function () { elegir(o, -1); } },
-            o.comuna + ' (' + (o.courier || 'sin courier') + (o.activo ? '' : ', inactiva') + ')');
+            (o.zona || o.region) + (o.courier ? ' · ' + o.courier : '') + (o.activo ? '' : ' (sin cobertura)'));
         }))));
     }
 
-    if (fila.activo) {
-      var notas = [];
-      if (fila.tiempoEntrega !== null) notas.push(VC.plural(fila.tiempoEntrega, 'día hábil', 'días hábiles') + ' de tránsito');
-      if (fecha && fecha.despuesDeCorte) notas.push('pedido después de las ' + VC.config.horaCorte + ':00, se cuenta desde mañana');
-      if (fecha && fecha.ajustadaPorReparto) notas.push('ajustada al siguiente día de reparto');
+    if (fila.activo && fecha) {
+      var notas = [VC.plural(fila.tiempo, 'día hábil', 'días hábiles') + ' de tránsito'];
+      if (fecha.despuesDeCorte) notas.push('pedido después de las ' + VC.horaDeCorteLocal() + ', se cuenta desde mañana');
+      if (fecha.ajustadaPorReparto) notas.push('ajustada al siguiente día de reparto');
       cuerpo.appendChild(h('div', { class: 'fecha' },
         h('p', { class: 'fecha-etiqueta' }, 'Fecha estimada de entrega'),
-        h('p', { class: 'fecha-valor' }, fecha ? fecha.texto : 'Sin tiempo de entrega en la matriz'),
-        h('p', { class: 'fecha-nota' }, fecha ? notas.join(' · ') : 'Consulta con tu teamleader.')));
+        h('p', { class: 'fecha-valor' }, fecha.texto),
+        h('p', { class: 'fecha-nota' }, notas.join(' · '))));
     }
 
-    var dias = h('div', { class: 'dias', 'aria-label': 'Reparto: ' + VC.resumirDias(reparto.dias) },
-      ORDEN_SEMANA.map(function (i) {
-        return h('span', { class: 'dia' + (reparto.dias[i] ? ' dia-activo' : '') }, VC.DIAS_CORTOS[i]);
-      }));
-
-    cuerpo.appendChild(h('dl', { class: 'datos' },
-      dato('Courier', fila.courier || 'Sin dato'),
-      dato('Pago al recibir', h('span', { class: 'pago-' + pago.tono }, pago.detalle)),
-      dato('Días de reparto', [dias, h('p', { class: 'texto-suave chico' },
-        'Matriz: “' + (fila.diasReparto || 'sin dato') + '”' + (reparto.reconocido ? '' : ' — no se pudo interpretar, se asume lunes a viernes'))], 'dato-ancho'),
-      fila.zipcode || fila.siglas ? dato('Código postal / siglas', (fila.zipcode || '-') + ' · ' + (fila.siglas || '-'), 'dato-ancho') : null));
+    var datos = h('dl', { class: 'datos' });
+    if (fila.courier) datos.appendChild(dato('Courier', fila.courier));
+    if (pago) datos.appendChild(dato('Pago al recibir', h('span', { class: 'pago-' + pago.tono }, pago.detalle)));
+    if (fila.dias) {
+      var reparto = VC.interpretarDiasReparto(fila.dias);
+      datos.appendChild(dato(c.etiquetas.dias, [
+        h('div', { class: 'dias', 'aria-label': 'Reparto: ' + VC.resumirDias(reparto.dias) },
+          ORDEN_SEMANA.map(function (i) { return h('span', { class: 'dia' + (reparto.dias[i] ? ' dia-activo' : '') }, VC.DIAS_CORTOS[i]); })),
+        h('p', { class: 'texto-suave chico' }, 'Matriz: “' + fila.dias + '”' + (reparto.reconocido ? '' : ' — no se pudo interpretar, se asume lunes a viernes'))
+      ], 'dato-ancho'));
+    }
+    if (fila.barrios) datos.appendChild(dato('Barrios', fila.barrios, 'dato-ancho'));
+    if (fila.codigo || fila.siglas) {
+      datos.appendChild(dato(c.etiquetas.codigo + (fila.siglas ? ' / siglas' : ''), [fila.codigo, fila.siglas].filter(Boolean).join(' · ')));
+    }
+    if (datos.children.length) cuerpo.appendChild(datos);
 
     if (fila.activo) {
       cuerpo.appendChild(h('div', { class: 'mensaje' },
@@ -424,7 +554,7 @@
     panel.replaceChildren(cabecera, cuerpo);
   }
 
-  // La fecha depende de la hora (corte de las 15:00): se refresca cada minuto.
+  // La fecha depende de la hora (corte de las 00:00 UTC): se refresca cada minuto.
   setInterval(function () { if (estado.elegido) renderDetalle(); }, 60 * 1000);
 
   // ─────────────────────────── Mapa ───────────────────────────
@@ -435,21 +565,18 @@
     if (!estado.mapa) {
       $('mapa').replaceChildren(vacio('Mapa no disponible', 'No se pudo cargar el mapa (¿sin internet?). El resto del validador funciona igual.'));
       $('mapa').classList.add('mapa-sin-carga');
-    } else {
-      setTimeout(function () { estado.mapa.ajustarTamano(); }, 0);
     }
   }
 
-  var AVISO_SIN_BUSQUEDA = 'La ubicación en el mapa funciona en la página publicada (GitHub Pages). ' +
-    'Abierta directamente desde el archivo, el servicio de mapas no responde.';
   var temporizadorMapa = null;
-  function ubicarLocalidadEnMapa() {
+  function ubicarEnMapa() {
     clearTimeout(temporizadorMapa);
     var fila = estado.elegido;
-    estado.puntoLocalidad = null;
+    var campana = estado.campana;
+    estado.puntoLugar = null;
     if (!estado.mapa) return;
     if (!fila) {
-      estado.mapa.ponerLocalidad(null);
+      estado.mapa.ponerLugar(null);
       renderInfoMapa();
       return;
     }
@@ -457,14 +584,14 @@
       renderInfoMapa(AVISO_SIN_BUSQUEDA);
       return;
     }
-    renderInfoMapa('Ubicando ' + fila.localidad + '…');
+    renderInfoMapa('Ubicando ' + fila.lugar + '…');
     // Espera a que el operador deje de moverse por la lista antes de consultar.
     temporizadorMapa = setTimeout(function () {
-      VC.geo.ubicarLocalidad(fila).then(function (punto) {
+      VC.geo.ubicarLugar(fila, campana).then(function (punto) {
         if (estado.elegido !== fila) return;
-        estado.puntoLocalidad = punto;
-        estado.mapa.ponerLocalidad(punto, fila.localidad + ' (' + fila.comuna + ')');
-        renderInfoMapa(punto ? null : 'No se pudo ubicar ' + fila.localidad + ' en el mapa.');
+        estado.puntoLugar = punto;
+        estado.mapa.ponerLugar(punto, fila.lugar + (fila.zona ? ' (' + fila.zona + ')' : ''));
+        renderInfoMapa(punto ? null : 'No se pudo ubicar ' + fila.lugar + ' en el mapa.');
       }).catch(function () {
         if (estado.elegido === fila) renderInfoMapa('No se pudo consultar el mapa (¿sin internet?).');
       });
@@ -473,39 +600,41 @@
 
   function renderInfoMapa(mensaje) {
     var info = $('info-mapa');
+    var c = estado.campana;
     var partes = [];
     if (mensaje) partes.push(h('p', { class: 'texto-suave chico' }, mensaje));
-    if (estado.puntoLocalidad && estado.puntoLocalidad.aproximada) {
-      partes.push(h('p', { class: 'texto-suave chico' }, 'No se encontró el punto exacto de la localidad; se muestra el centro de la comuna.'));
+    if (estado.puntoLugar && estado.puntoLugar.aproximada) {
+      partes.push(h('p', { class: 'texto-suave chico' }, 'No se encontró el punto exacto; se muestra el centro de ' +
+        (c.etiquetas.zona.toLowerCase() === 'zona' ? 'la zona' : 'la ' + c.etiquetas.zona.toLowerCase()) + '.'));
     }
 
-    if (estado.cliente && estado.puntoLocalidad && estado.elegido) {
-      var km = VC.geo.distanciaKm(estado.cliente, estado.puntoLocalidad);
+    if (estado.cliente && estado.puntoLugar && estado.elegido) {
+      var km = VC.geo.distanciaKm(estado.cliente, estado.puntoLugar);
       var lejos = km > VC.config.distanciaAvisoKm;
       partes.push(h('p', { class: 'alerta ' + (lejos ? 'alerta-aviso' : 'alerta-ok') },
         'La dirección del cliente está a ', h('strong', null, km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(1).replace('.', ',') + ' km'),
-        ' de ' + estado.elegido.localidad + '. ',
-        lejos ? 'Parece lejos: confirma con el cliente que la localidad sea la correcta.' : ''));
+        ' de ' + estado.elegido.lugar + '. ',
+        lejos ? 'Parece lejos: confirma con el cliente que sea el lugar correcto.' : ''));
     }
 
     if (estado.cliente && estado.cliente.coincidencias) {
-      var c = estado.cliente.coincidencias;
-      var lista = c.porLocalidad.concat(c.porComuna.slice(0, 12));
+      var co = estado.cliente.coincidencias;
+      var lista = co.porLugar.concat(co.porZona.slice(0, 12));
       if (lista.length) {
         partes.push(h('div', { class: 'sugerencias' },
-          h('p', { class: 'etiqueta' }, 'Localidades de la matriz para esta dirección:'),
+          h('p', { class: 'etiqueta' }, 'En la matriz para esta dirección:'),
           h('div', { class: 'chips' }, lista.map(function (f) {
             return h('button', {
               type: 'button',
               class: 'chip' + (f.activo ? '' : ' chip-inactivo') + (estado.elegido === f ? ' chip-elegido' : ''),
               onclick: function () { elegir(f, -1); renderInfoMapa(); }
-            }, f.localidad + ' · ' + f.comuna + (f.activo ? '' : ' (inactiva)'));
+            }, f.lugar + ' · ' + (f.zona || f.region) + (f.activo ? '' : ' (sin cobertura)'));
           })),
-          c.porComuna.length > 12 ? h('p', { class: 'texto-suave chico' }, 'y ' + (c.porComuna.length - 12) + ' más en la comuna; usa el buscador para afinar.') : null));
+          co.porZona.length > 12 ? h('p', { class: 'texto-suave chico' }, 'y ' + (co.porZona.length - 12) + ' más; usa el buscador para afinar.') : null));
       } else {
         partes.push(h('p', { class: 'alerta alerta-aviso' },
-          'Ninguna localidad de la matriz coincide con los nombres de esta dirección (' + estado.cliente.lugares.slice(0, 4).join(', ') +
-          '). Búscala por comuna en el buscador; si no aparece, probablemente no hay cobertura.'));
+          'Ningún registro de la matriz coincide con los nombres de esta dirección (' + estado.cliente.lugares.slice(0, 4).join(', ') +
+          '). Búscalo en el buscador; si no aparece, probablemente no hay cobertura.'));
       }
     }
 
@@ -521,18 +650,20 @@
       return;
     }
     if (texto.length < 4) {
-      contenedor.replaceChildren(h('p', { class: 'alerta alerta-aviso' }, 'Escribe calle, número y comuna.'));
+      contenedor.replaceChildren(h('p', { class: 'alerta alerta-aviso' }, 'Escribe calle, número y ' + estado.campana.etiquetas.zona.toLowerCase() + '.'));
       return;
     }
+    var campana = estado.campana;
     var boton = $('btn-direccion');
     boton.disabled = true;
     boton.textContent = 'Buscando…';
     contenedor.replaceChildren();
 
-    VC.geo.buscarDireccion(texto, 5)
+    VC.geo.buscarDireccion(texto, 5, campana)
       .then(function (lista) {
+        if (campana !== estado.campana) return;
         if (!lista.length) {
-          contenedor.replaceChildren(h('p', { class: 'alerta alerta-aviso' }, 'No se encontró esa dirección. Prueba agregando la comuna o revisa la ortografía.'));
+          contenedor.replaceChildren(h('p', { class: 'alerta alerta-aviso' }, 'No se encontró esa dirección. Prueba agregando la ciudad o revisa la ortografía.'));
           return;
         }
         if (lista.length === 1) {
@@ -554,7 +685,7 @@
       })
       .finally(function () {
         boton.disabled = false;
-        boton.textContent = 'Buscar';
+        boton.textContent = 'Ubicar';
       });
   });
 
@@ -564,18 +695,25 @@
       lon: r.lon,
       nombre: r.nombre,
       lugares: r.lugares,
-      coincidencias: estado.buscador.coincidenciasExactas(r.lugares)
+      coincidencias: buscadorActual().coincidenciasExactas(r.lugares)
     };
     if (estado.mapa) estado.mapa.ponerCliente(r, 'Cliente: ' + r.nombre);
 
-    // Si aún no hay localidad elegida (o no calza), proponer la más probable.
-    var c = estado.cliente.coincidencias;
-    var mejor = c.porLocalidad[0] || null;
-    var elegidoCalza = estado.elegido && (c.porLocalidad.indexOf(estado.elegido) !== -1 || c.porComuna.indexOf(estado.elegido) !== -1);
+    // Si aún no hay un lugar elegido (o no calza con la dirección), proponer el más probable.
+    var co = estado.cliente.coincidencias;
+    var mejor = co.porLugar[0] || null;
+    var elegidoCalza = estado.elegido && (co.porLugar.indexOf(estado.elegido) !== -1 || co.porZona.indexOf(estado.elegido) !== -1);
     if (mejor && !elegidoCalza) elegir(mejor, -1, { sinDesplazar: true });
     else renderDetalle();
     renderInfoMapa();
+
+    if (window.matchMedia('(max-width: 960px)').matches) {
+      $('panel-mapa').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
-  iniciar();
+  // ─────────────────────────── Inicio ───────────────────────────
+  renderSelectorCampanas();
+  aplicarTextosCampana();
+  abrirCampana();
 })();

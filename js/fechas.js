@@ -73,34 +73,43 @@ window.VC = window.VC || {};
   // ─── Fecha estimada ───
 
   var UN_DIA = 24 * 60 * 60 * 1000;
-  var formatoChile = new Intl.DateTimeFormat('en-CA', {
-    timeZone: VC.config.zonaHoraria,
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23'
-  });
+  var UNA_HORA = 60 * 60 * 1000;
 
-  /** Fecha de hoy y hora en Chile, sin importar la zona horaria de la PC. Fechas como medianoche UTC. */
-  function ahoraEnChile(ahora) {
-    var partes = {};
-    formatoChile.formatToParts(ahora).forEach(function (p) { partes[p.type] = Number(p.value); });
-    return { hoy: new Date(Date.UTC(partes.year, partes.month - 1, partes.day)), hora: partes.hour % 24 };
-  }
-
+  function soloFechaUtc(d) { return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
   function clave(fecha) { return fecha.toISOString().slice(0, 10); }
   function siguiente(fecha) { return new Date(fecha.getTime() + UN_DIA); }
-  function esFeriado(fecha) { return VC.config.feriados.has(clave(fecha)); }
-  function esHabil(fecha) {
-    var d = fecha.getUTCDay();
-    return d !== 0 && d !== 6 && !esFeriado(fecha);
-  }
 
   /**
-   * Fecha estimada = hoy (o mañana si ya pasó la hora de corte) + N días hábiles
-   * (sin fines de semana ni feriados), movida al siguiente día de reparto de la localidad.
+   * Día de despacho: cambia a las 00:00 UTC (19:00 en Perú, 21:00 en Chile y Paraguay en verano).
+   * Devuelve el día (medianoche UTC) y si ya se pasó el corte respecto al día local del operador.
    */
-  VC.calcularFechaEntrega = function (diasHabiles, textoDiasReparto, ahora) {
-    var chile = ahoraEnChile(ahora || new Date());
-    var despuesDeCorte = chile.hora >= VC.config.horaCorte;
-    var fecha = despuesDeCorte ? siguiente(chile.hoy) : chile.hoy;
+  function diaDeDespacho(ahora) {
+    var hoy = soloFechaUtc(new Date(ahora.getTime() - VC.config.corteUtcHora * UNA_HORA));
+    var local = new Date(Date.UTC(ahora.getFullYear(), ahora.getMonth(), ahora.getDate()));
+    return { hoy: hoy, despuesDeCorte: hoy.getTime() > local.getTime() };
+  }
+
+  /** Hora local (del computador del operador) en que cambia el día: "19:00" en Perú. */
+  VC.horaDeCorteLocal = function () {
+    var corte = new Date(Date.UTC(2026, 0, 15, VC.config.corteUtcHora, 0));
+    return String(corte.getHours()).padStart(2, '0') + ':' + String(corte.getMinutes()).padStart(2, '0');
+  };
+
+  /**
+   * Fecha estimada = día de despacho + N días hábiles (sin fines de semana ni feriados del país),
+   * movida al siguiente día de reparto de la localidad.
+   */
+  VC.calcularFechaEntrega = function (diasHabiles, textoDiasReparto, campana, ahora) {
+    var feriados = campana && campana.feriadosSet ? campana.feriadosSet : new Set();
+    var esFeriado = function (f) { return feriados.has(clave(f)); };
+    var esHabil = function (f) {
+      var d = f.getUTCDay();
+      return d !== 0 && d !== 6 && !esFeriado(f);
+    };
+
+    var despacho = diaDeDespacho(ahora || new Date());
+    var fecha = despacho.hoy;
+    var despuesDeCorte = despacho.despuesDeCorte;
 
     var contados = 0;
     while (contados < diasHabiles) {

@@ -6,21 +6,76 @@
   var LARGO_MINIMO = 8;
 
   var estado = {
+    campana: VC.campana(VC.almacen.leer('campana')),
+    sobrePublicado: null, // archivo publicado de la campaña (cifrado)
+    publicados: null,     // sus filas, si se pudieron descifrar con el código
+    codigoComparado: null,
     archivo: null,
-    hojas: [],          // [{ nombre, filas }]
-    importacion: null,  // resultado de VC.importacion.importar
-    publicados: null,   // filas actuales (si se pudieron descifrar con el código)
-    codigoComparado: null
+    hojas: [],            // [{ nombre, filas }]
+    importacion: null
   };
-
-  if (window.VC_DATOS) {
-    $('estado-actual').textContent = 'Hay un archivo de datos publicado';
-    $('ayuda-codigo').textContent += ' Si usas el mismo código actual, verás qué cambia respecto a lo publicado. ' +
-      'Si escribes un código nuevo, avisa a los operadores: tendrán que ingresar el nuevo.';
-  }
 
   if (typeof XLSX === 'undefined') {
     mostrarError('error-archivo', 'No se pudo cargar el lector de Excel (¿sin internet?). Recarga la página.');
+  }
+
+  // ─── Campaña ───
+
+  function nombreSalida(c) { return c.archivo.split('/').pop(); }
+
+  function renderCampana() {
+    var c = estado.campana;
+    document.body.setAttribute('data-campana', c.id);
+    $('marca-campana').replaceChildren(VC.bandera(c.id), c.nombre);
+    $('titulo-admin').textContent = 'Actualizar la matriz de cobertura de ' + c.nombre;
+    $('nombre-salida').textContent = c.archivo;
+    $('btn-generar').textContent = 'Generar ' + nombreSalida(c);
+    var columnas = c.requeridas.map(function (r) { return (c.etiquetas[r] || r).toUpperCase(); });
+    $('ayuda-archivo').textContent = 'Descarga la hoja de ' + c.nombre + ' como Excel (.xlsx) o CSV. Columnas obligatorias: ' +
+      columnas.join(', ') + '. Las demás columnas que reconozca se cargan también.';
+
+    var nav = $('selector-campanas');
+    nav.replaceChildren.apply(nav, VC.CAMPANAS.map(function (x) {
+      var activa = x.id === c.id;
+      return h('button', {
+        type: 'button',
+        class: 'campana' + (activa ? ' campana-activa' : ''),
+        'aria-pressed': activa ? 'true' : 'false',
+        onclick: function () { if (!activa) cambiarCampana(x.id); }
+      }, VC.bandera(x.id), h('span', { class: 'campana-nombre' }, x.nombre));
+    }));
+  }
+
+  function cambiarCampana(id) {
+    estado.campana = VC.campana(id);
+    VC.almacen.guardar('campana', estado.campana.id);
+    estado.sobrePublicado = null;
+    estado.publicados = null;
+    estado.codigoComparado = null;
+    estado.archivo = null;
+    estado.hojas = [];
+    estado.importacion = null;
+    $('archivo').value = '';
+    $('nombre-archivo').textContent = '';
+    $('grupo-hoja').hidden = true;
+    $('listo').hidden = true;
+    mostrarError('error-archivo', '');
+    renderCampana();
+    cargarPublicado();
+    renderRevision();
+  }
+
+  function cargarPublicado() {
+    var c = estado.campana;
+    $('estado-actual').textContent = 'Buscando datos publicados de ' + c.nombre + '…';
+    VC.cargarSobre(c).then(function (sobre) {
+      if (c !== estado.campana) return;
+      estado.sobrePublicado = sobre;
+      $('estado-actual').textContent = sobre
+        ? 'Hay datos publicados de ' + c.nombre + ' (escribe el código para ver los cambios)'
+        : 'Todavía no hay datos publicados de ' + c.nombre;
+      compararConPublicado();
+    });
   }
 
   // ─── Paso 1: código ───
@@ -53,19 +108,19 @@
 
   /** Intenta abrir los datos publicados con el código, para mostrar los cambios. */
   function compararConPublicado() {
+    var c = estado.campana;
     var codigo = $('codigo').value;
-    if (!window.VC_DATOS || estado.codigoComparado === codigo) return;
+    if (!estado.sobrePublicado || !codigoValido().ok || estado.codigoComparado === codigo) return;
     estado.codigoComparado = codigo;
-    VC.cripto.descifrar(window.VC_DATOS, codigo)
+    VC.cripto.descifrar(estado.sobrePublicado, codigo)
       .then(function (datos) {
-        if (estado.codigoComparado !== codigo) return;
-        estado.publicados = datos.filas || null;
-        $('estado-actual').textContent = 'Publicado: ' + VC.plural(datos.filas.length, 'localidad', 'localidades') +
+        if (estado.codigoComparado !== codigo || c !== estado.campana) return;
+        estado.publicados = (datos.filas || []).map(VC.migrarFila);
+        $('estado-actual').textContent = 'Publicado en ' + c.nombre + ': ' + VC.plural(estado.publicados.length, 'registro', 'registros') +
           (datos.generado ? ' · ' + VC.formatearFechaHora(datos.generado) : '');
       })
       .catch(function () {
-        if (estado.codigoComparado !== codigo) return;
-        estado.publicados = null;
+        if (estado.codigoComparado === codigo) estado.publicados = null;
       })
       .then(renderRevision);
   }
@@ -92,6 +147,7 @@
   });
 
   function leerArchivo(archivo) {
+    var c = estado.campana;
     estado.archivo = archivo;
     estado.hojas = [];
     estado.importacion = null;
@@ -107,19 +163,23 @@
     }
 
     var esTexto = /\.(csv|tsv|txt)$/i.test(archivo.name);
-    var lectura = esTexto ? archivo.text() : archivo.arrayBuffer();
-    lectura
+    (esTexto ? archivo.text() : archivo.arrayBuffer())
       .then(function (contenido) {
         var libro = esTexto
           ? XLSX.read(contenido, { type: 'string', raw: true })
           : XLSX.read(contenido, { type: 'array' });
         estado.hojas = libro.SheetNames.map(function (nombre) {
-          var filas = XLSX.utils.sheet_to_json(libro.Sheets[nombre], { header: 1, raw: false, defval: '', blankrows: false });
-          return { nombre: nombre, filas: filas };
-        }).filter(function (hoja) { return VC.importacion.hojaValida(hoja.filas); });
+          return { nombre: nombre, filas: XLSX.utils.sheet_to_json(libro.Sheets[nombre], { header: 1, raw: false, defval: '', blankrows: false }) };
+        }).filter(function (hoja) { return VC.importacion.hojaValida(c, hoja.filas); });
 
         if (!estado.hojas.length) {
-          mostrarError('error-archivo', 'Ninguna hoja de "' + archivo.name + '" tiene las columnas LOCALIDAD, COMUNA, COURIER y TIEMPO DE ENTREGA en las primeras 15 filas.');
+          var otra = VC.CAMPANAS.filter(function (x) { return x !== c; }).find(function (x) {
+            return libro.SheetNames.some(function (n) {
+              return VC.importacion.hojaValida(x, XLSX.utils.sheet_to_json(libro.Sheets[n], { header: 1, raw: false, defval: '', blankrows: false }));
+            });
+          });
+          mostrarError('error-archivo', 'Ninguna hoja de "' + archivo.name + '" tiene las columnas de ' + c.nombre + '.' +
+            (otra ? ' Parece un archivo de ' + otra.nombre + ': cambia la campaña arriba.' : ' Revisa que la fila de títulos esté entre las primeras 15.'));
           renderRevision();
           return;
         }
@@ -142,7 +202,7 @@
 
   function importarHoja(nombre) {
     var hoja = estado.hojas.find(function (x) { return x.nombre === nombre; });
-    estado.importacion = hoja ? VC.importacion.importar(hoja.nombre, hoja.filas) : null;
+    estado.importacion = hoja ? VC.importacion.importar(estado.campana, hoja.nombre, hoja.filas) : null;
     $('listo').hidden = true;
     renderRevision();
   }
@@ -169,14 +229,16 @@
     }
 
     var filas = imp.filas;
-    var contar = function (fn) { return filas.filter(fn).length; };
+    var porCourier = new Map();
+    filas.forEach(function (f) { if (f.courier) porCourier.set(f.courier, (porCourier.get(f.courier) || 0) + 1); });
+    var couriers = Array.from(porCourier.entries()).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 4);
+
     var partes = [
       h('p', { class: 'texto-suave' }, 'Hoja “' + imp.hoja + '”'),
       h('div', { class: 'cifras' },
-        cifra('Localidades', filas.length, 'verde'),
-        cifra('Inactivas', contar(function (f) { return !f.activo; }), 'rojo'),
-        cifra(VC.config.courierContra, contar(function (f) { return f.courier === VC.config.courierContra; })),
-        cifra(VC.config.courierBlue, contar(function (f) { return f.courier === VC.config.courierBlue; })),
+        cifra('Registros', filas.length, 'verde'),
+        cifra('Sin cobertura', filas.filter(function (f) { return !f.activo; }).length, 'rojo'),
+        couriers.map(function (x) { return cifra(x[0], x[1]); }),
         cifra('Filas descartadas', imp.errores.length, imp.errores.length ? 'rojo' : null),
         cifra('Avisos', imp.avisos.length, imp.avisos.length ? 'ambar' : null),
         cifra('Repetidas', imp.duplicados, imp.duplicados ? 'ambar' : null))
@@ -186,16 +248,16 @@
       var d = VC.importacion.comparar(estado.publicados, filas);
       partes.push(h('div', { class: 'grupo' },
         h('p', null, h('strong', null, 'Cambios respecto a lo publicado: '),
-          d.nuevas + ' nuevas · ' + d.eliminadas + ' eliminadas · ' + d.cambiadas + ' modificadas'),
+          d.nuevas + ' nuevos · ' + d.eliminadas + ' eliminados · ' + d.cambiadas + ' modificados'),
         d.ejemplos.length
           ? h('ul', { class: 'lista-chica' }, d.ejemplos.map(function (x) { return h('li', null, x); }))
           : h('p', { class: 'texto-suave chico' }, 'El archivo es igual a lo publicado.'),
         d.eliminadas > estado.publicados.length * 0.2
-          ? h('p', { class: 'alerta alerta-aviso' }, 'Ojo: se eliminarían ' + d.eliminadas + ' localidades. Revisa que sea el archivo y la hoja correctos.')
+          ? h('p', { class: 'alerta alerta-aviso' }, 'Ojo: se eliminarían ' + d.eliminadas + ' registros. Revisa que sea el archivo y la hoja correctos.')
           : null));
-    } else if (window.VC_DATOS && codigoValido().ok) {
+    } else if (estado.sobrePublicado && codigoValido().ok) {
       partes.push(h('p', { class: 'texto-suave chico grupo' },
-        'El código no abre los datos publicados (¿es un código nuevo?), así que no se muestran los cambios.'));
+        'El código no abre los datos publicados de ' + estado.campana.nombre + ' (¿es un código nuevo?), así que no se muestran los cambios.'));
     }
 
     var incidencias = imp.errores.map(function (i) { return { fila: i.fila, mensaje: i.mensaje, tipo: 'error' }; })
@@ -224,6 +286,7 @@
 
   $('btn-generar').addEventListener('click', function () {
     var imp = estado.importacion;
+    var c = estado.campana;
     if (!imp || imp.error || !codigoValido().ok) return;
 
     var boton = $('btn-generar');
@@ -232,6 +295,7 @@
     mostrarError('error-generar', '');
 
     var datos = {
+      campana: c.id,
       generado: new Date().toISOString(),
       archivo: estado.archivo ? estado.archivo.name : '',
       hoja: imp.hoja,
@@ -241,17 +305,18 @@
     VC.cripto.cifrar(datos, $('codigo').value)
       .then(function (sobre) {
         var contenido =
-          '/* Validador de Cobertura Chile — datos cifrados. Generado con admin.html el ' +
+          '/* Validador de Cobertura — campaña ' + c.nombre + ' — datos cifrados. Generado con admin.html el ' +
           new Date().toLocaleString('es-CL') + '.\n   No editar a mano: vuelve a generarlo desde admin.html. */\n' +
-          'window.VC_DATOS = ' + JSON.stringify(sobre) + ';\n';
-        descargar('cobertura.js', contenido);
+          'window.' + c.variable + ' = ' + JSON.stringify(sobre) + ';\n';
+        descargar(nombreSalida(c), contenido);
+        $('archivo-descargado').textContent = nombreSalida(c);
         $('listo').hidden = false;
       })
       .catch(function (err) {
         mostrarError('error-generar', 'No se pudo generar el archivo: ' + (err && err.message ? err.message : err));
       })
       .finally(function () {
-        boton.textContent = 'Generar cobertura.js';
+        boton.textContent = 'Generar ' + nombreSalida(c);
         actualizarGenerar();
       });
   });
@@ -264,4 +329,7 @@
     enlace.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
+
+  renderCampana();
+  cargarPublicado();
 })();
