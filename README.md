@@ -1,78 +1,81 @@
-# Validador de Cobertura Chile
+# Validador de Cobertura
 
 Página web (HTML + CSS + JavaScript, sin instalaciones ni compilación) para que los operadores de televentas
-validen al instante:
+validen al instante la cobertura de despacho en **Chile, Perú y Paraguay**:
 
-- si una localidad de Chile tiene **cobertura** (activa o inactiva),
-- qué **courier** la atiende y cómo **paga** el cliente (Contraentrega: efectivo o transferencia · Blue Express: solo efectivo),
-- la **fecha estimada de entrega**: días hábiles en hora de Chile, feriados, hora de corte (15:00) y **días de reparto**
-  de cada localidad,
-- y **dónde está el cliente en el mapa**: se busca su dirección, se marca con un pin y se compara con la localidad
-  (distancia y aviso si parece lejos). Si solo tienes la dirección, la página propone las localidades de la matriz
-  que calzan.
+- si el lugar tiene **cobertura** y, cuando la matriz lo trae, qué **courier** lo atiende, cómo **paga** el cliente
+  y qué **productos** se pueden vender,
+- la **fecha estimada de entrega**: días hábiles, feriados de cada país, **días de reparto** de cada lugar y el corte
+  diario a las **00:00 UTC** (19:00 en Perú),
+- y **dónde está el cliente en el mapa**: se ubica su dirección, se compara con el lugar elegido (distancia y aviso
+  si parece lejos) y se proponen los lugares de la matriz que calzan con esa dirección.
 
-También: búsqueda tolerante a tildes y errores de tipeo, por código postal o siglas, aviso de localidades con el
-mismo nombre en otras comunas, mensaje listo para copiar al cliente y resumen interno.
+Cada campaña tiene su color, sus filtros y sus columnas. Se cambia con los botones de banderas del encabezado.
+
+| Campaña | Se busca por | Filtros | Columnas del Excel |
+|---|---|---|---|
+| Chile | Localidad, comuna, código postal, siglas | Región → Comuna, Courier | LOCALIDAD, COMUNA, PROVINCIA, REGION, SIGLAS, ZIPCODE, DIAS DE REPARTO, COBERTURA, TIEMPO DE ENTREGA, COURIER |
+| Perú | Urbanización, distrito, provincia, UBIGEO | Departamento → Provincia → Distrito | (Departamento), Provincia, Distrito, Urbanizacion, UBIGEO, Cobertura |
+| Paraguay | Ciudad, barrio, departamento, ZIP code | Departamento, Courier, Productos | Courier, ZIP CODE, Barrios, Ciudad, Departamento, Tiempo de entrega, Dias de entrega, (productos) |
 
 ## Archivos
 
 | Archivo | Para qué sirve |
 |---|---|
 | `index.html` | La página de los operadores |
-| `admin.html` | Convierte el Excel de cobertura en `datos/cobertura.js` (cifrado) |
-| `datos/cobertura.js` | Los datos cifrados. **Se reemplaza en cada actualización** |
-| `js/config.js` | Reglas del negocio: hora de corte, reglas de pago, **feriados**, distancia de aviso |
+| `admin.html` | Convierte el Excel de una campaña en su archivo de datos cifrado |
+| `datos/chile.js`, `datos/peru.js`, `datos/paraguay.js` | Datos cifrados de cada campaña. Se reemplazan en cada actualización |
+| `js/campanas.js` | **Todo lo de cada país**: columnas, filtros, textos, reglas de pago, feriados |
+| `js/config.js` | Hora de corte (00:00 UTC) y distancia de aviso en el mapa |
 | `js/*.js` | Buscador, fechas, cifrado, mapa, importación del Excel |
-| `css/estilos.css` | Estilos |
 
 ## Seguridad de los datos
 
-GitHub Pages gratis exige que el repositorio sea público. Por eso `datos/cobertura.js` va **cifrado** con el código del
-equipo (PBKDF2 + AES-256-GCM, estándar del navegador): quien abra el archivo solo ve texto ilegible. Los operadores
-escriben el código una vez y pueden dejarlo recordado en su equipo (botón **Bloquear** para olvidarlo).
+GitHub Pages gratis exige que el repositorio sea público. Por eso los archivos de `datos/` van **cifrados** con el
+código del equipo (PBKDF2 + AES-256-GCM): sin el código solo se ve texto ilegible.
 
-- Usa un código de **al menos 10 caracteres** que mezcle letras y números (la página exige mínimo 8).
-- Si alguien que no debe conoce el código: genera el archivo de nuevo con un código nuevo y súbelo.
-- El Excel **nunca** se sube al repositorio (`.gitignore` lo bloquea): se procesa solo en el navegador del administrador.
+- Cada campaña puede tener su propio código o compartir uno. Si un operador ya entró con un código, la página lo
+  prueba sola en las otras campañas.
+- Usa códigos de **al menos 10 caracteres** que mezclen letras y números.
+- El botón **Bloquear** olvida los códigos guardados en ese equipo.
+- Los Excel **nunca** se suben al repositorio (`.gitignore` los bloquea).
 
 ## Publicar en GitHub Pages (una sola vez)
 
 1. Crea un repositorio en GitHub (público) y sube todos estos archivos.
-2. En el repositorio: **Settings → Pages → Build and deployment → Source: Deploy from a branch**,
-   rama `main`, carpeta `/ (root)` → **Save**.
+2. **Settings → Pages → Source: Deploy from a branch**, rama `main`, carpeta `/ (root)` → **Save**.
 3. En 1–2 minutos la página queda en `https://TU-USUARIO.github.io/NOMBRE-DEL-REPO/`.
-   Ese es el link para los operadores.
 
-## Actualizar la cobertura
+## Actualizar una campaña
 
-1. En Google Sheets, **Archivo → Descargar → Microsoft Excel (.xlsx)** de la hoja *Cobertura Chile*.
-2. Abre `https://TU-USUARIO.github.io/NOMBRE-DEL-REPO/admin.html`.
+1. Descarga la hoja de la campaña como Excel (.xlsx).
+2. Abre `admin.html` (enlace **Administración** al pie de la página) y elige la campaña con las banderas.
 3. Escribe el código del equipo (el mismo de siempre, así verás qué cambia respecto a lo publicado).
-4. Arrastra el Excel. Si tiene varias pestañas, elige cuál usar (por defecto *Matriz*).
-5. Revisa el reporte (localidades, inactivas, filas descartadas, avisos, cambios) y presiona **Generar cobertura.js**.
-6. En GitHub entra a la carpeta `datos` → **Add file → Upload files** → arrastra el `cobertura.js` descargado →
-   **Commit changes**.
+4. Arrastra el Excel, revisa el reporte y presiona **Generar** (descarga `chile.js`, `peru.js` o `paraguay.js`).
+5. En GitHub, carpeta `datos` → **Add file → Upload files** → arrastra el archivo → **Commit changes**.
 
-Los operadores ven los datos nuevos al recargar la página (GitHub puede tardar hasta ~10 minutos en dejar de entregar
-la versión anterior).
+Los operadores ven los datos nuevos al recargar la página (1–2 minutos).
+
+## Agregar una campaña nueva
+
+En `js/campanas.js` se copia el bloque de una campaña parecida y se ajustan: nombre, país, archivo de datos,
+nombres de columnas, filtros, textos y feriados. El color se define en `css/estilos.css`
+(`body[data-campana='...']`).
 
 ## Probar en el computador
 
-Abrir `index.html` con doble clic funciona para buscar localidades, ver fechas y copiar mensajes. La **búsqueda de
-direcciones en el mapa** solo funciona en la página publicada: el servicio de mapas (OpenStreetMap) rechaza consultas
-que no vienen de un sitio web.
+Abrir `index.html` con doble clic funciona para buscar, ver fechas y copiar mensajes. La **ubicación en el mapa** solo
+funciona en la página publicada (OpenStreetMap rechaza consultas que no vienen de un sitio web).
 
 ## Servicios externos (gratuitos, sin clave)
 
-- Mapa: [Leaflet](https://leafletjs.com) + mapa base de [OpenStreetMap](https://www.openstreetmap.org/copyright).
-- Direcciones: [Nominatim](https://nominatim.org) (OpenStreetMap), máximo 1 consulta por segundo (la página lo
-  respeta y guarda en el navegador las ubicaciones ya consultadas). Respaldo: [Photon](https://photon.komoot.io).
+- Mapa: [Leaflet](https://leafletjs.com) + [OpenStreetMap](https://www.openstreetmap.org/copyright).
+- Direcciones: [Nominatim](https://nominatim.org), máximo 1 consulta por segundo (la página lo respeta y guarda las
+  ubicaciones ya consultadas). Respaldo: [Photon](https://photon.komoot.io).
 - Lectura de Excel en `admin.html`: [SheetJS](https://sheetjs.com).
-
-Estos servicios son para uso moderado. Si el equipo crece mucho, conviene pasar a un servicio de mapas con cuenta propia.
 
 ## Mantenimiento
 
-- **Feriados:** agrega los de cada año en `js/config.js`.
-- **Reglas de pago u hora de corte:** también en `js/config.js`.
+- **Feriados** de cada país: en `js/campanas.js` (revisar cada año; en Paraguay algunos se trasladan por decreto).
+- **Reglas de pago:** hoy solo Chile las tiene definidas (`pagos` en `js/campanas.js`).
 - `TIEMPO DE ENTREGA` se interpreta como **días hábiles**.

@@ -9,26 +9,29 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/estilos.css">
 </head>
-<body>
+<body data-campana="chile">
   <header class="barra">
     <div class="barra-contenido">
       <div class="marca">
         <img src="favicon.svg" alt="" width="36" height="36">
         <div>
-          <p class="marca-titulo">Administración</p>
+          <p class="marca-titulo">Administración <span class="marca-campana" id="marca-campana"></span></p>
           <p class="marca-sub" id="estado-actual">Generar archivo de datos</p>
         </div>
       </div>
-      <a class="boton boton-barra" href="index.html">Ir al validador</a>
+      <div class="barra-acciones">
+        <nav class="campanas" id="selector-campanas" aria-label="Campaña"></nav>
+        <a class="boton boton-barra" href="index.html">Ir al validador</a>
+      </div>
     </div>
   </header>
 
   <main class="contenedor">
     <div class="admin">
       <section class="tarjeta seccion">
-        <h1 class="titulo-seccion">Actualizar la matriz de cobertura</h1>
+        <h1 class="titulo-seccion" id="titulo-admin">Actualizar la matriz de cobertura</h1>
         <p class="texto-suave">
-          Esta página convierte el Excel de <strong>Cobertura Chile</strong> en el archivo <code>datos/cobertura.js</code>,
+          Elige la campaña arriba. Esta página convierte su Excel en el archivo <code id="nombre-salida">datos/chile.js</code>,
           cifrado con el código del equipo. El Excel no sale de tu computador: todo se procesa aquí, en el navegador.
         </p>
       </section>
@@ -36,7 +39,8 @@
       <section class="tarjeta seccion">
         <h2 class="titulo-seccion"><span class="paso-numero">1</span>Código del equipo</h2>
         <p class="texto-suave" id="ayuda-codigo">
-          Es el código que escriben los operadores para entrar. Usa al menos 8 caracteres, mezclando letras y números.
+          Es el código que escriben los operadores de esta campaña para entrar. Usa al menos 8 caracteres, mezclando letras y números.
+          Puede ser el mismo para todas las campañas o uno distinto para cada una.
         </p>
         <div class="dos-columnas grupo">
           <div>
@@ -54,10 +58,7 @@
 
       <section class="tarjeta seccion">
         <h2 class="titulo-seccion"><span class="paso-numero">2</span>Excel de cobertura</h2>
-        <p class="texto-suave">
-          En Google Sheets: <em>Archivo → Descargar → Microsoft Excel (.xlsx)</em>. También sirve un CSV.
-          Columnas necesarias: LOCALIDAD, COMUNA, COURIER y TIEMPO DE ENTREGA.
-        </p>
+        <p class="texto-suave" id="ayuda-archivo"></p>
         <div class="zona-archivo" id="zona-archivo">
           <strong>Arrastra aquí el archivo</strong>
           <span class="texto-suave chico">o</span>
@@ -79,13 +80,13 @@
 
       <section class="tarjeta seccion" id="seccion-generar" hidden>
         <h2 class="titulo-seccion"><span class="paso-numero">4</span>Generar y publicar</h2>
-        <button type="button" class="boton boton-primario" id="btn-generar" disabled>Generar cobertura.js</button>
+        <button type="button" class="boton boton-primario" id="btn-generar" disabled>Generar archivo</button>
         <p class="alerta alerta-error grupo" id="error-generar" role="alert" hidden></p>
         <div id="listo" hidden>
-          <p class="alerta alerta-ok grupo">Se descargó <strong>cobertura.js</strong>. Ahora súbelo a GitHub:</p>
+          <p class="alerta alerta-ok grupo">Se descargó <strong id="archivo-descargado"></strong>. Ahora súbelo a GitHub:</p>
           <ol class="pasos-github">
             <li>Abre el repositorio en GitHub y entra a la carpeta <code>datos</code>.</li>
-            <li>Presiona <strong>Add file → Upload files</strong> y arrastra el <code>cobertura.js</code> descargado.</li>
+            <li>Presiona <strong>Add file → Upload files</strong> y arrastra el archivo descargado (reemplaza al anterior).</li>
             <li>Presiona <strong>Commit changes</strong>.</li>
             <li>En 1 a 2 minutos los operadores verán los datos nuevos al recargar la página.</li>
           </ol>
@@ -99,11 +100,13 @@
 
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
           integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
-  <script src="datos/cobertura.js"></script>
   <script src="js/config.js"></script>
   <script src="js/texto.js"></script>
+  <script src="js/campanas.js"></script>
   <script src="js/fechas.js"></script>
+  <script src="js/buscador.js"></script>
   <script src="js/cripto.js"></script>
+  <script src="js/datos.js"></script>
   <script src="js/importacion.js"></script>
   <script src="js/admin.js"></script>
 </body>

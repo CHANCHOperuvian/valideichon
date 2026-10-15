@@ -1,4 +1,11 @@
-Aquí va `cobertura.js`, el archivo de datos cifrado que genera `admin.html`.
+Aquí van los archivos de datos cifrados que genera `admin.html`, uno por campaña:
 
-Para actualizarlo: genera uno nuevo en `admin.html` y súbelo a esta carpeta reemplazando el anterior
+- `chile.js`
+- `peru.js`
+- `paraguay.js`
+
+Para actualizar una campaña: genera su archivo en `admin.html` y súbelo a esta carpeta reemplazando el anterior
 (en GitHub: **Add file → Upload files** → **Commit changes**).
+
+(`cobertura.js` es el nombre que usaba la primera versión, solo Chile. Sigue funcionando, pero es mejor
+reemplazarlo por `chile.js`.)

@@ -33,81 +33,87 @@ window.VC = window.VC || {};
   function tolerancia(token) { return token.length >= 8 ? 2 : 1; }
   function ordenarEs(a, b) { return a.localeCompare(b, 'es'); }
 
-  /**
-   * Índice de búsqueda sobre las localidades.
-   * buscar(consulta, filtros, limite) → { filas, puntajes, total, aproximado }
-   */
-  function Buscador(filas) {
-    var self = this;
-    this.porNombre = new Map();
-    this.porComuna = new Map();
-
-    this.items = filas.map(function (fila) {
-      var loc = VC.normalizar(fila.localidad);
-      var com = VC.normalizar(fila.comuna);
-      agregar(self.porNombre, loc, fila);
-      agregar(self.porComuna, com, fila);
-      return {
-        fila: fila,
-        loc: loc,
-        com: com,
-        sig: VC.normalizar(fila.siglas),
-        zip: VC.normalizar(fila.zipcode),
-        palabras: (loc + ' ' + com).split(' '),
-        texto: [loc, com, VC.normalizar(fila.provincia), VC.normalizar(fila.region),
-          VC.normalizar(fila.regionOriginal), VC.normalizar(fila.siglas), VC.normalizar(fila.zipcode)].join(' ')
-      };
-    });
-
-    var comunas = new Map();
-    var couriers = new Set();
-    filas.forEach(function (f) {
-      if (!comunas.has(f.region)) comunas.set(f.region, new Set());
-      comunas.get(f.region).add(f.comuna);
-      if (f.courier) couriers.add(f.courier);
-    });
-    this.regiones = Array.from(comunas.keys()).sort(ordenarEs);
-    this.comunasPorRegion = new Map();
-    comunas.forEach(function (set, region) {
-      self.comunasPorRegion.set(region, Array.from(set).sort(ordenarEs));
-    });
-    this.todasLasComunas = Array.from(new Set(filas.map(function (f) { return f.comuna; }))).sort(ordenarEs);
-    this.couriers = Array.from(couriers).sort(ordenarEs);
-    this.total = filas.length;
-  }
-
   function agregar(mapa, clave, fila) {
+    if (!clave) return;
     var lista = mapa.get(clave);
     if (lista) lista.push(fila);
     else mapa.set(clave, [fila]);
   }
 
-  /** Otras localidades con el mismo nombre (en otras comunas). */
-  Buscador.prototype.homonimos = function (fila) {
-    return (this.porNombre.get(VC.normalizar(fila.localidad)) || []).filter(function (f) { return f.id !== fila.id; });
+  /**
+   * Índice de búsqueda sobre las filas de una campaña (formato común, ver campanas.js).
+   * buscar(consulta, filtros, limite) → { filas, puntajes, total, aproximado }
+   * filtros: { region: 'X', zona: 'Y', courier: 'Z', …, soloActivas: true }
+   */
+  function Buscador(filas) {
+    var self = this;
+    this.filas = filas;
+    this.porLugar = new Map();
+    this.porZona = new Map();
+
+    this.items = filas.map(function (fila) {
+      var lugar = VC.normalizar(fila.lugar);
+      var zona = VC.normalizar(fila.zona || fila.region);
+      agregar(self.porLugar, lugar, fila);
+      agregar(self.porZona, VC.normalizar(fila.zona), fila);
+      if (fila.region && fila.region !== fila.zona) agregar(self.porZona, VC.normalizar(fila.region), fila);
+      return {
+        fila: fila,
+        lugar: lugar,
+        zona: zona,
+        sig: VC.normalizar(fila.siglas),
+        cod: VC.normalizar(fila.codigo),
+        palabras: (lugar + ' ' + zona).split(' '),
+        texto: [lugar, zona, VC.normalizar(fila.provincia), VC.normalizar(fila.region), VC.normalizar(fila.regionOriginal),
+          VC.normalizar(fila.siglas), VC.normalizar(fila.codigo), VC.normalizar(fila.barrios)].join(' ')
+      };
+    });
+    this.total = filas.length;
+  }
+
+  function cumpleFiltros(fila, filtros, excepto) {
+    for (var campo in filtros) {
+      if (campo === excepto || campo === 'soloActivas' || !filtros[campo]) continue;
+      if (fila[campo] !== filtros[campo]) return false;
+    }
+    return !filtros.soloActivas || fila.activo;
+  }
+
+  /**
+   * Valores posibles de un filtro, considerando los filtros anteriores de la lista
+   * (así "Provincia" solo muestra las del departamento elegido).
+   */
+  Buscador.prototype.opciones = function (campo, filtrosAnteriores) {
+    var valores = new Set();
+    this.filas.forEach(function (f) {
+      if (f[campo] && cumpleFiltros(f, filtrosAnteriores || {}, campo)) valores.add(f[campo]);
+    });
+    return Array.from(valores).sort(ordenarEs);
   };
 
-  /** Localidades cuyo nombre (o comuna) coincide exactamente con alguno de los nombres dados. */
+  /** Otras filas con el mismo nombre de lugar. */
+  Buscador.prototype.homonimos = function (fila) {
+    return (this.porLugar.get(VC.normalizar(fila.lugar)) || []).filter(function (f) { return f.id !== fila.id; });
+  };
+
+  /** Filas cuyo lugar o zona coincide exactamente con alguno de los nombres (para direcciones). */
   Buscador.prototype.coincidenciasExactas = function (nombres) {
-    var porLocalidad = [];
-    var porComuna = [];
+    var porLugar = [];
+    var porZona = [];
     var vistos = new Set();
     var self = this;
-    nombres.forEach(function (nombre) {
-      var n = VC.normalizar(nombre);
-      if (!n) return;
-      (self.porNombre.get(n) || []).forEach(function (f) {
-        if (!vistos.has(f.id)) { vistos.add(f.id); porLocalidad.push(f); }
+    var normalizados = nombres.map(VC.normalizar).filter(Boolean);
+    normalizados.forEach(function (n) {
+      (self.porLugar.get(n) || []).forEach(function (f) {
+        if (!vistos.has(f.id)) { vistos.add(f.id); porLugar.push(f); }
       });
     });
-    nombres.forEach(function (nombre) {
-      var n = VC.normalizar(nombre);
-      if (!n) return;
-      (self.porComuna.get(n) || []).forEach(function (f) {
-        if (!vistos.has(f.id)) { vistos.add(f.id); porComuna.push(f); }
+    normalizados.forEach(function (n) {
+      (self.porZona.get(n) || []).forEach(function (f) {
+        if (!vistos.has(f.id)) { vistos.add(f.id); porZona.push(f); }
       });
     });
-    return { porLocalidad: porLocalidad, porComuna: porComuna };
+    return { porLugar: porLugar, porZona: porZona };
   };
 
   Buscador.prototype.buscar = function (consulta, filtros, limite) {
@@ -115,19 +121,13 @@ window.VC = window.VC || {};
     limite = limite || 60;
     var q = VC.normalizar(consulta);
     var tokens = q ? q.split(' ') : [];
-    var hayFiltros = Boolean(filtros.region || filtros.comuna || filtros.courier);
+    var hayFiltros = Object.keys(filtros).some(function (k) { return k !== 'soloActivas' && filtros[k]; });
 
-    var candidatos = this.items.filter(function (it) {
-      return (!filtros.region || it.fila.region === filtros.region) &&
-        (!filtros.comuna || it.fila.comuna === filtros.comuna) &&
-        (!filtros.courier || it.fila.courier === filtros.courier) &&
-        (!filtros.soloActivas || it.fila.activo);
-    });
+    var candidatos = this.items.filter(function (it) { return cumpleFiltros(it.fila, filtros); });
 
     if (tokens.length === 0) {
       if (!hayFiltros) return { filas: [], puntajes: [], total: 0, aproximado: false };
-      var lista = candidatos.map(function (it) { return { it: it, puntaje: 0 }; });
-      return armar(lista, limite, false);
+      return armar(candidatos.map(function (it) { return { it: it, puntaje: 0 }; }), limite, false);
     }
 
     var exactos = [];
@@ -163,21 +163,21 @@ window.VC = window.VC || {};
 
   function puntuar(it, q, primerToken) {
     var p;
-    if (it.loc === q) p = 1000;
+    if (it.lugar === q) p = 1000;
     else if (it.sig === q) p = 900;
-    else if (it.zip === q) p = 850;
-    else if (it.loc.indexOf(q) === 0) p = 700;
-    else if (it.com === q) p = 600;
-    else if (it.loc.split(' ').some(function (w) { return w.indexOf(primerToken) === 0; })) p = 500;
-    else if (it.loc.indexOf(q) !== -1) p = 400;
-    else if (it.com.indexOf(q) === 0) p = 300;
+    else if (it.cod === q) p = 850;
+    else if (it.lugar.indexOf(q) === 0) p = 700;
+    else if (it.zona === q) p = 600;
+    else if (it.lugar.split(' ').some(function (w) { return w.indexOf(primerToken) === 0; })) p = 500;
+    else if (it.lugar.indexOf(q) !== -1) p = 400;
+    else if (it.zona.indexOf(q) === 0) p = 300;
     else p = 100;
     return it.fila.activo ? p : p - 1; // ante empate, las activas primero
   }
 
   function armar(lista, limite, aproximado) {
     lista.sort(function (a, b) {
-      return b.puntaje - a.puntaje || ordenarEs(a.it.fila.localidad, b.it.fila.localidad);
+      return b.puntaje - a.puntaje || ordenarEs(a.it.fila.lugar, b.it.fila.lugar);
     });
     var recorte = lista.slice(0, limite);
     return {
@@ -187,6 +187,25 @@ window.VC = window.VC || {};
       aproximado: aproximado
     };
   }
+
+  /** Convierte filas guardadas por la versión anterior (solo Chile) al formato común. */
+  VC.migrarFila = function (f) {
+    if (f.lugar !== undefined) return f;
+    return {
+      id: f.id,
+      lugar: f.localidad,
+      zona: f.comuna,
+      provincia: f.provincia,
+      region: f.region,
+      regionOriginal: f.regionOriginal,
+      codigo: f.zipcode,
+      siglas: f.siglas,
+      dias: f.diasReparto,
+      activo: f.activo,
+      tiempo: f.tiempoEntrega,
+      courier: f.courier
+    };
+  };
 
   VC.Buscador = Buscador;
 })();
